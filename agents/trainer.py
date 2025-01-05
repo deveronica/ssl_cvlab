@@ -88,7 +88,6 @@ class Trainer():
             momentum=0.9,
             weight_decay=5e-4
         )   
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)  # 스케줄러 설정
 
         # cifar10_mean = (0.4914, 0.4822, 0.4465)
         # cifar10_std = (0.2471, 0.2435, 0.2616)
@@ -180,7 +179,7 @@ class Trainer():
 
                 total_loss += loss.item()
 
-            scheduler.step() # batch 별로 스케줄러 업데이트 
+
             
             avg_loss = total_loss / len(labeled_trainloader)
             mlflow.log_metric("loss", avg_loss, step=epoch)

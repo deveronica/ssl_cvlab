@@ -92,7 +92,7 @@ class Trainer():
                 momentum=0.9,
                 weight_decay=5e-4
             )   
-            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)  # 스케줄러 설정
+
         else:
             optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
 
@@ -164,12 +164,6 @@ class Trainer():
 
             mlflow.log_metric("accuracy", test_acc, step=epoch)
 
-            if cfg.optimizer == 'sgd':
-                # learning rate 기록
-                mlflow.log_metric("lr", scheduler.get_last_lr()[0], step=epoch)
-                
-                scheduler.step()
-            
             # 조기 종료 조건 추가
             if avg_loss < best_loss:
                 best_loss = avg_loss

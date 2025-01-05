@@ -79,8 +79,16 @@ class Trainer():
         self.set_seed(cfg)  # 시드 고정
 
         model = get_model(cfg).to('cuda')
-        optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
-        # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)  # 스케줄러 설정
+
+        # optimizer SGD로 변경 
+        # optimizer = optim.Adam(model.parameters(), lr=cfg.lr) 
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=cfg.lr,
+            momentum=0.9,
+            weight_decay=5e-4
+        )   
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)  # 스케줄러 설정
 
         # cifar10_mean = (0.4914, 0.4822, 0.4465)
         # cifar10_std = (0.2471, 0.2435, 0.2616)
@@ -122,9 +130,10 @@ class Trainer():
             num_workers=cfg.num_workers,
         )
 
-        best_acc = 0
+        # early stopping (loss 변경)
+        best_loss = float('inf') #best_acc = 0
         early_stopping_counter = 0
-
+        
         for epoch in tqdm(range(cfg.epochs), desc="Training"):
             model.train()
             total_loss = 0
@@ -171,22 +180,26 @@ class Trainer():
 
                 total_loss += loss.item()
 
-            mlflow.log_metric("loss", total_loss / len(labeled_trainloader), step=epoch)
+            scheduler.step() # batch 별로 스케줄러 업데이트 
+            
+            avg_loss = total_loss / len(labeled_trainloader)
+            mlflow.log_metric("loss", avg_loss, step=epoch)
 
             test_acc = self.test(model, testloader)
 
-            is_best = test_acc > best_acc
-            best_acc = max(test_acc, best_acc)
+            # is_best = test_acc > best_acc
+            # best_acc = max(test_acc, best_acc)
 
             mlflow.log_metric("accuracy", test_acc, step=epoch)
 
-            # 조기 종료 조건 추가
-            if is_best:
+            # 조기 종료 조건 (loss 기준)
+            if avg_loss < best_loss:
+                best_loss = avg_loss
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
                 if early_stopping_counter > 100:
-                    print("Early stopping...")
+                    print("Early stopping(loss)... ")
                     break
                 
         mlflow.pytorch.log_model(model, "model")

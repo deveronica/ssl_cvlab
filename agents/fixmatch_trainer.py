@@ -73,7 +73,8 @@ class Trainer():
         self.set_seed(cfg)  # 시드 고정
 
         model = get_model(cfg).to(f'cuda:{cfg.device}')
-        optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
+
+        # optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
         # scheduler = CosineAnnealingWarmUpOnVariablePlateau(
         #     optimizer,
         #     max_epoch=cfg.epochs,
@@ -81,10 +82,24 @@ class Trainer():
         #     max_lr=0.01,
         #     min_lr=1e-6,
         #     )  # 스케줄러 설정
+        
+        
+        if cfg.optimizer == 'sgd':
+            # optimizer SGD로 변경
+            optimizer = optim.SGD(
+                model.parameters(),
+                lr=cfg.lr,
+                momentum=0.9,
+                weight_decay=5e-4
+            )   
+            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)  # 스케줄러 설정
+        else:
+            optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
 
         labeled_trainloader, unlabeled_trainloader, testloader =  get_dataloader(cfg)
 
-        best_acc = 0
+        # early stopping (loss 변경)
+        best_loss = float('inf') #best_acc = 0
         early_stopping_counter = 0
 
         for epoch in tqdm(range(cfg.epochs), desc="Training"):
@@ -136,24 +151,33 @@ class Trainer():
                 total_loss += loss.item()
 
             # mlflow.log_metric("lr", scheduler.get_lr()[0], step=epoch)
-            mlflow.log_metric("loss", total_loss / len(labeled_trainloader), step=epoch)
-
+            
+            avg_loss = total_loss / len(labeled_trainloader)
+            mlflow.log_metric("loss", avg_loss, step=epoch)
+            
             test_acc = self.test(cfg, model, testloader)
 
-            is_best = test_acc > best_acc
-            best_acc = max(test_acc, best_acc)
+            # is_best = test_acc > best_acc
+            # best_acc = max(test_acc, best_acc)
 
             # scheduler.step(test_acc)  # 스케줄러 업데이트
 
             mlflow.log_metric("accuracy", test_acc, step=epoch)
 
+            if cfg.optimizer == 'sgd':
+                # learning rate 기록
+                mlflow.log_metric("lr", scheduler.get_last_lr()[0], step=epoch)
+                
+                scheduler.step()
+            
             # 조기 종료 조건 추가
-            if is_best:
+            if avg_loss < best_loss:
+                best_loss = avg_loss
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
                 if early_stopping_counter > 120:
-                    print("Early stopping...")
+                    print("Early stopping(loss)...")
                     break
                 
         mlflow.pytorch.log_model(model, "model")

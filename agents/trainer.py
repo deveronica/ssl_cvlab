@@ -130,7 +130,8 @@ class Trainer():
         )
 
         # early stopping (loss 변경)
-        best_loss = float('inf') #best_acc = 0
+        #best_acc = 0
+        best_loss = np.inf
         early_stopping_counter = 0
         
         for epoch in tqdm(range(cfg.epochs), desc="Training"):

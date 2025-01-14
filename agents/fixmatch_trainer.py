@@ -74,7 +74,6 @@ class Trainer():
 
         model = get_model(cfg).to(f'cuda:{cfg.device}')
 
-        # optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
         # scheduler = CosineAnnealingWarmUpOnVariablePlateau(
         #     optimizer,
         #     max_epoch=cfg.epochs,
@@ -95,14 +94,15 @@ class Trainer():
                 )   
             print("SGD...")
 
-        else:
+        elif cfg.optimizer == 'adam':
             optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
             print("ADAM...")
 
         labeled_trainloader, unlabeled_trainloader, testloader =  get_dataloader(cfg)
 
         # early stopping (loss 변경)
-        best_loss = float('inf') #best_acc = 0
+        #best_acc = 0
+        best_loss = np.inf
         early_stopping_counter = 0
 
         for epoch in tqdm(range(cfg.epochs), desc="Training"):

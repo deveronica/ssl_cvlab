@@ -24,22 +24,46 @@ mstar_mean = 0.5
 mstar_std = 0.5
 
 
+# def x_u_split(cfg, labels):
+#     label_per_class = cfg.num_labeled // cfg.num_classes
+#     labels = np.array(labels)
+#     labeled_idx = []
+#     # unlabeled data: all data (https://github.com/kekmodel/FixMatch-pytorch/issues/10)
+#     unlabeled_idx = np.array(range(len(labels)))
+#     for i in range(cfg.num_classes):
+#         idx = np.where(labels == i)[0]
+#         idx = np.random.choice(idx, label_per_class, False)
+#         labeled_idx.extend(idx)
+#     labeled_idx = np.array(labeled_idx)
+#     assert len(labeled_idx) == cfg.num_labeled
+
+#     if cfg.expand_labels or cfg.num_labeled < cfg.batch_size:
+#         num_expand_x = math.ceil(cfg.batch_size * cfg.eval_step / cfg.num_labeled)
+#         labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+#     np.random.shuffle(labeled_idx)
+#     return labeled_idx, unlabeled_idx
+
 def x_u_split(cfg, labels):
     label_per_class = cfg.num_labeled // cfg.num_classes
     labels = np.array(labels)
     labeled_idx = []
-    # unlabeled data: all data (https://github.com/kekmodel/FixMatch-pytorch/issues/10)
     unlabeled_idx = np.array(range(len(labels)))
+
     for i in range(cfg.num_classes):
         idx = np.where(labels == i)[0]
-        idx = np.random.choice(idx, label_per_class, False)
+        if len(idx) == 0:
+            raise ValueError(f"No samples found for class {i}. Check your dataset or class distribution.")
+        idx = np.random.choice(idx, min(label_per_class, len(idx)), False)
         labeled_idx.extend(idx)
-    labeled_idx = np.array(labeled_idx)
-    assert len(labeled_idx) == cfg.num_labeled
 
+    labeled_idx = np.array(labeled_idx)
+    if len(labeled_idx) != cfg.num_labeled:
+        print(f"Warning: Number of labeled samples ({len(labeled_idx)}) is less than expected ({cfg.num_labeled}).")
+    
     if cfg.expand_labels or cfg.num_labeled < cfg.batch_size:
-        num_expand_x = math.ceil(cfg.batch_size * cfg.eval_step / cfg.num_labeled)
+        num_expand_x = math.ceil(cfg.batch_size * cfg.eval_step / len(labeled_idx))
         labeled_idx = np.hstack([labeled_idx for _ in range(num_expand_x)])
+    
     np.random.shuffle(labeled_idx)
     return labeled_idx, unlabeled_idx
 

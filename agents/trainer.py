@@ -3,10 +3,6 @@ import random
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
-
-from torchvision import datasets, transforms
-
 from tqdm import tqdm
 
 import numpy as np
@@ -14,6 +10,9 @@ import numpy as np
 import mlflow
 import mlflow.pytorch
 
+from data.loader import get_dataloader
+
+from .train_utils import CosineAnnealingWarmUpOnVariablePlateau
 from models.comannet import ComanNet
 from models.resnet18 import ResNet18
 
@@ -42,9 +41,6 @@ class Trainer():
     """Trainer for SSL like FixMatch, FullMatch"""
     def __init__(self, cfg):
         self.cfg = cfg
-        mlflow.set_tracking_uri(uri=cfg.uri)
-        # mlflow.set_experiment(cfg.experiment)
-        self.train(self.cfg)
 
     def set_seed(self, cfg):
         random.seed(cfg.SEED)
@@ -57,13 +53,7 @@ class Trainer():
         try:
             mlflow.set_experiment(cfg.experiment)
         except:
-            try:
-                mlflow.create_experiment(cfg.experiment)
-            except:
-                from mlflow.tracking.client import MlflowClient
-                client = MlflowClient(tracking_uri=cfg.uri)
-                key = client.get_experiment_by_name(cfg.experiment).experiment_id
-                client.restore_experiment(key)
+            mlflow.create_experiment(cfg.experiment)
             mlflow.set_experiment(cfg.experiment)
         mlflow.start_run()
         mlflow.log_params(vars(cfg))
@@ -78,134 +68,111 @@ class Trainer():
         
         self.set_seed(cfg)  # 시드 고정
 
-        model = get_model(cfg).to('cuda')
-
-        # optimizer SGD로 변경 
-        # optimizer = optim.Adam(model.parameters(), lr=cfg.lr) 
-        optimizer = optim.SGD(
-            model.parameters(),
-            lr=cfg.lr,
-            momentum=0.9,
-            weight_decay=5e-4
-        )   
-
-        # cifar10_mean = (0.4914, 0.4822, 0.4465)
-        # cifar10_std = (0.2471, 0.2435, 0.2616)
-
-        # transform = transforms.Compose([
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.RandomCrop(32, padding=4),
-        #     transforms.ToTensor(),
-        #     transforms.Normalize(mean=cifar10_mean, std=cifar10_std)
-        # ])
-        train_transform = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, padding=4),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3)
-            ])
-        preprocess = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3)
-            ])
-        test_transform = preprocess
-
-        trainset = datasets.CIFAR10(cfg.root, train=True, download=True, transform=train_transform)
-        testset = datasets.CIFAR10(cfg.root, train=False, download=True, transform=test_transform)
-
-        train_sampler = RandomSampler
-        test_sampler = SequentialSampler
+        model = get_model(cfg).to(f'cuda:{cfg.device}')
         
-        labeled_trainloader = DataLoader(
-            trainset,
-            sampler=train_sampler(trainset),
-            batch_size=cfg.batch_size,
-            num_workers=cfg.num_workers,
-        )
-        testloader = DataLoader(
-            testset,
-            sampler=test_sampler(testset),
-            batch_size=cfg.batch_size,
-            num_workers=cfg.num_workers,
-        )
+        if cfg.optimizer == 'sgd':
+            # optimizer SGD로 변경 #lamda beta
+            # learning rate =0.03, momentum = 0.9
+            optimizer = optim.SGD(
+                model.parameters(),
+                lr=cfg.lr,
+                momentum = 0.9,
+                nesterov = True
+                )   
+            print("SGD...")
+
+        elif cfg.optimizer == 'adam':
+            optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
+            print("ADAM...")
+
+        # scheduler = CosineAnnealingWarmUpOnVariablePlateau(
+        #     optimizer,
+        #     max_epoch=cfg.epochs,
+        #     warmup_steps=30,
+        #     max_lr=0.01,
+        #     min_lr=1e-6,
+        #)  # 스케줄러 설정
+
+        labeled_trainloader, unlabeled_trainloader, testloader =  get_dataloader(cfg)
 
         # early stopping (loss 변경)
         #best_acc = 0
         best_loss = np.inf
         early_stopping_counter = 0
-        
+
         for epoch in tqdm(range(cfg.epochs), desc="Training"):
             model.train()
             total_loss = 0
+            test_acc = 0
 
-            for idx, labeled in enumerate(labeled_trainloader):
-                inputs_x, targets_x = labeled
-                # (inputs_u_w, inputs_u_s), _ = unlabeled
-
-                inputs_x, targets_x = inputs_x.to('cuda'), targets_x.to('cuda')
+            for idx, (labeled, unlabeled) in enumerate(zip(labeled_trainloader, unlabeled_trainloader)):
                 optimizer.zero_grad()
+                inputs_x, targets_x = labeled
+                (inputs_u_w, inputs_u_s1, inputs_u_s2), _ = unlabeled
 
-                # inputs_u_s = torch.Tensor(inputs_u_s, requires_grad=True)
-                # inputs_u_s.requires_grad_()
+                inputs_x, targets_x = inputs_x.to(f'cuda:{cfg.device}'), targets_x.to(f'cuda:{cfg.device}')
+                inputs_u_w = inputs_u_w.to(f'cuda:{cfg.device}')
+                inputs_u_s1 = inputs_u_s1.to(f'cuda:{cfg.device}')
+                inputs_u_s2 = inputs_u_s2.to(f'cuda:{cfg.device}')
 
                 logits_x = model(inputs_x)
-                # inputs_u_w = inputs_u_w.to('cuda')
-                # logits_u_w = model(inputs_u_w)
-                # inputs_u_s = inputs_u_s.to('cuda')
-                # logits_u_s = model(inputs_u_s)
+                logits_u_w = model(inputs_u_w)
+                logits_u_s1 = model(inputs_u_s1)
+                logits_u_s2 = model(inputs_u_s2)
 
                 Lx = F.cross_entropy(logits_x, targets_x, reduction='mean')
+                pseudo_label = torch.softmax(logits_u_w.detach(), dim=-1)
+                max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+                mask = max_probs.ge(cfg.threshold).float()
 
-                # pseudo_label = torch.softmax(logits_u_w.detach(), dim=-1)
-                # max_probs, targets_u = torch.max(pseudo_label, dim=-1)
+                Lu = (F.cross_entropy(logits_u_s1, targets_u, reduction='none') * mask).mean()
+                # Lu2 = (F.cross_entropy(logits_u_s2, targets_u, reduction='none') * mask).mean()
 
-                # For FGSM
-                # cost = -torch.nn.CrossEntropyLoss()(logits_u_s, pseudo_label)
-                # if inputs_u_s.grad is not None:
-                    # inputs_u_s.grad.data.fill_(0)
-                # cost.backward()
-                # print(inputs_u_s.grad)
-                # inputs_u_s = inputs_u_s - 0.03*torch.Tensor.sign_(inputs_u_s.grad)
-                # model.zero_grad()
-                # logits_u_s = model(inputs_u_s)
+                # AugMix
+                p_u_w = torch.clamp(F.softmax(logits_u_w, dim=1), 1e-7, 1)
+                p_u_s1 = torch.clamp(F.softmax(logits_u_s1, dim=1), 1e-7, 1)
+                p_u_s2 = torch.clamp(F.softmax(logits_u_s2, dim=1), 1e-7, 1)
 
-                # mask = max_probs.ge(cfg.threshold).float()
+                # Clamp mixture distribution to avoid exploding KL divergence
+                p_mix = torch.clamp((p_u_w + p_u_s1 + p_u_s2) / 3., 1e-7, 1).log()
+                Ljsd = cfg.jsd * (F.kl_div(p_mix, p_u_w, reduction='batchmean')
+                             + F.kl_div(p_mix, p_u_s1, reduction='batchmean') 
+                             + F.kl_div(p_mix, p_u_s2, reduction='batchmean')) / 3
+                # -AugMix
 
-                # Lu = (F.cross_entropy(logits_u_s, targets_u, reduction='none') * mask).mean()
+                loss = Lx + Lu + Ljsd
 
-                loss = Lx #+ Lu
                 loss.backward()
                 optimizer.step()
-                # scheduler.step()  # 스케줄러 업데이트
 
                 total_loss += loss.item()
 
-
+            # mlflow.log_metric("lr", scheduler.get_lr()[0], step=epoch)
             
             avg_loss = total_loss / len(labeled_trainloader)
-            mlflow.log_metric("loss", avg_loss, step=epoch)
-
-            test_acc = self.test(model, testloader)
-
+            mlflow.log_metric("train_loss", avg_loss, step=epoch)
+            
+            test_acc = self.test(cfg, model, testloader)
             # is_best = test_acc > best_acc
             # best_acc = max(test_acc, best_acc)
+            # scheduler.step(test_acc)  # 스케줄러 업데이트
 
             mlflow.log_metric("accuracy", test_acc, step=epoch)
 
-            # 조기 종료 조건 (loss 기준)
+            # 조기 종료 조건 추가
             if avg_loss < best_loss:
                 best_loss = avg_loss
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
-                if early_stopping_counter > 100:
-                    print("Early stopping(loss)... ")
+                if early_stopping_counter > 120:
+                    print("Early stopping(train_loss)...")
                     break
                 
         mlflow.pytorch.log_model(model, "model")
         self.close()
 
-    def test(self, model, testloader):
+    def test(self, cfg, model, testloader):
         model.eval()
         correct = 0
         total = 0
@@ -213,7 +180,7 @@ class Trainer():
         criterion = torch.nn.CrossEntropyLoss()
         with torch.no_grad():
             for inputs, targets in testloader:
-                inputs, targets = inputs.to('cuda'), targets.to('cuda')
+                inputs, targets = inputs.to(f'cuda:{cfg.device}'), targets.to(f'cuda:{cfg.device}')
                 outputs = model(inputs)
                 predicted = torch.max(outputs, 1)[1]
                 correct += (predicted == targets).sum()
@@ -221,4 +188,9 @@ class Trainer():
                 total += inputs.size(0)
 
         accuracy = correct / total
+
         return accuracy
+
+    def run(self):
+        mlflow.set_tracking_uri(uri=self.cfg.uri)
+        self.train(self.cfg)

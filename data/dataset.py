@@ -344,7 +344,7 @@ def get_sentinel1(cfg, root):
         root,
         train_unlabeled_idxs,
         train=True,
-        transform=TransformSelectAugment(mstar_mean, mstar_std, cfg.size, cfg.aug),
+        transform=TransformFixMatchAugMix(mstar_mean, mstar_std, cfg.size),
     )
     test_dataset = Sentinel1(
         root, train=False, mean=mstar_mean, std=mstar_std, size=cfg.size, transform=transform_val

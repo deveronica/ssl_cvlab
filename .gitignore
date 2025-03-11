@@ -1,4 +1,6 @@
-.DS_Store
+### Custom Exception ###
+# Folder Structure
+!./**/.gitkeep
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
@@ -170,12 +172,12 @@ poetry.toml
 pyrightconfig.json
 
 ### VisualStudioCode ###
-.vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
 !.vscode/*.code-snippets
+.vscode/*
 
 # Local History for Visual Studio Code
 .history/
@@ -197,3 +199,5 @@ input/*
 
 # Real Setting File for Security
 config.yaml
+
+.DS_Store
